@@ -40,11 +40,16 @@ jobs:
           echo "Latest n8n version is: $LATEST_VERSION"
           echo "version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: 🧐 Check if image with this version already exists
-        id: check_image
+      # --- FIX IS HERE ---
+      # Step 1: Install the 'crane' tool
+      - name: Install crane
         uses: gabe565/setup-crane@v1
         with:
           version: v0.19.1
+
+      # Step 2: Use the 'crane' tool to check for the image
+      - name: 🧐 Check if image with this version already exists
+        id: check_image
         run: |
           if crane digest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }} > /dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -53,6 +58,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "New version ${{ steps.n8n_version.outputs.version }} found! Proceeding to build."
           fi
+      # --- END OF FIX ---
 
       - name: 🚀 Build and push Docker image
         if: steps.check_image.outputs.exists == 'false'
