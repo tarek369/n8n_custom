@@ -1,13 +1,11 @@
-name: Docker
+name: Check n8n Version and Build
 
 on:
+  # Run this workflow once a day at 07:39 UTC
   schedule:
     - cron: '39 7 * * *'
-  push:
-    branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ "main" ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -19,53 +17,70 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
+      id-token: write # Required for signing
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
-        with:
-          cosign-release: 'v2.2.4'
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+        uses: docker/setup-buildx-action@v3
 
       - name: Log into registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # This is the modified step
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+      - name: 📢 Get latest n8n version from NPM
+        id: n8n_version
+        run: |
+          LATEST_VERSION=$(npm view n8n version)
+          echo "Latest n8n version is: $LATEST_VERSION"
+          echo "version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
+      - name: 🧐 Check if image with this version already exists
+        id: check_image
+        uses: gabe565/setup-crane@v1
+        with:
+          version: v0.19.1
+        run: |
+          if crane digest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }} > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image with tag ${{ steps.n8n_version.outputs.version }} already exists. No build needed."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "New version ${{ steps.n8n_version.outputs.version }} found! Proceeding to build."
+          fi
+
+      - name: 🚀 Build and push Docker image
+        if: steps.check_image.outputs.exists == 'false'
         id: build-and-push
-        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
+        uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.n8n_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Sign the published Docker image
-        if: ${{ github.event_name != 'pull_request' }}
+      - name: Install cosign
+        if: steps.check_image.outputs.exists == 'false'
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - name: ✍️ Sign the published Docker image
+        if: steps.check_image.outputs.exists == 'false'
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          TAG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }}
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
-        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+        run: cosign sign --yes "${TAG}@${DIGEST}"
+
+      - name: ✅ Image already up-to-date
+        if: steps.check_image.outputs.exists == 'true'
+        run: echo "Skipping build as the latest version is already published."
