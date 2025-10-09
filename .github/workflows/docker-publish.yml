@@ -1,7 +1,7 @@
 name: Check n8n Version and Build
 
 on:
-  # Run this workflow once a day at 07:39 UTC
+  # Run this workflow once a day
   schedule:
     - cron: '39 7 * * *'
   # Allows you to run this workflow manually from the Actions tab
@@ -40,25 +40,18 @@ jobs:
           echo "Latest n8n version is: $LATEST_VERSION"
           echo "version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
 
-      # --- FIX IS HERE ---
-      # Step 1: Install the 'crane' tool
-      - name: Install crane
-        uses: gabe565/setup-crane@v1
-        with:
-          version: v0.19.1
-
-      # Step 2: Use the 'crane' tool to check for the image
+      # --- THIS STEP IS NOW FIXED ---
       - name: 🧐 Check if image with this version already exists
         id: check_image
         run: |
-          if crane digest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }} > /dev/null 2>&1; then
+          # Use 'docker manifest inspect'. It succeeds if the tag exists, and fails if it does not.
+          if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.n8n_version.outputs.version }} > /dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Image with tag ${{ steps.n8n_version.outputs.version }} already exists. No build needed."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "New version ${{ steps.n8n_version.outputs.version }} found! Proceeding to build."
           fi
-      # --- END OF FIX ---
 
       - name: 🚀 Build and push Docker image
         if: steps.check_image.outputs.exists == 'false'
